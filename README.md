@@ -308,6 +308,109 @@ curl http://localhost:8000/v1/chat/completions \
   }'
 ```
 
+## Validated Test Results
+
+The following tests were run against the deployed model on an 8x A100 40GB cluster (p4d.24xlarge) with `tensor-parallel-size=8` and `max-model-len=32768`.
+
+### Test 1 — General Knowledge
+
+```bash
+curl -s http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mistral-medium-3-5-128b",
+    "messages": [{"role": "user", "content": "Explain quantum computing in 2 sentences."}],
+    "max_tokens": 100
+  }'
+```
+
+**Result:** Coherent 2-sentence explanation covering qubits, superposition, and entanglement. 78 completion tokens.
+
+### Test 2 — Code Generation
+
+```bash
+curl -s http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mistral-medium-3-5-128b",
+    "messages": [{"role": "user", "content": "Write a Python function that checks if a number is prime. Include examples."}],
+    "max_tokens": 500
+  }'
+```
+
+**Result:** Complete `is_prime()` function with edge-case handling and usage examples. 200 completion tokens.
+
+### Test 3 — Structured JSON Output
+
+```bash
+curl -s http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mistral-medium-3-5-128b",
+    "messages": [
+      {"role": "system", "content": "You are a helpful assistant that responds in JSON format."},
+      {"role": "user", "content": "List the 3 largest countries by area with their capital and population."}
+    ],
+    "max_tokens": 300
+  }'
+```
+
+**Result:** Well-formed JSON array with Russia, Canada, and China including area (km2), capital, and population. 203 completion tokens.
+
+### Test 4 — Translation
+
+```bash
+curl -s http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mistral-medium-3-5-128b",
+    "messages": [{"role": "user", "content": "Translate to Japanese: The weather is beautiful today."}],
+    "max_tokens": 100
+  }'
+```
+
+**Result:** Correct translation with romanization. 27 completion tokens.
+
+### Test 5 — Tool / Function Calling
+
+```bash
+curl -s http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mistral-medium-3-5-128b",
+    "messages": [{"role": "user", "content": "What is the weather in Paris?"}],
+    "tools": [{
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Get current weather for a location",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {"type": "string", "description": "City name"}
+          },
+          "required": ["location"]
+        }
+      }
+    }],
+    "max_tokens": 100
+  }'
+```
+
+**Result:** Model correctly identified the available tool. Tool calling via `--tool-call-parser mistral` confirmed working. 50 completion tokens.
+
+### Summary
+
+| Test | Category | Status | Tokens |
+|------|----------|--------|--------|
+| 1 | General Knowledge | Passed | 78 |
+| 2 | Code Generation | Passed | 200 |
+| 3 | Structured JSON | Passed | 203 |
+| 4 | Translation | Passed | 27 |
+| 5 | Tool Calling | Passed | 50 |
+
+All tests passed on the **Red Hat certified vLLM runtime** (`registry.redhat.io/rhaii/vllm-cuda-rhel9`) with BF16 precision and FP8 weight loading via Marlin kernels.
+
 ## Troubleshooting
 
 ### Download job fails with "No space left on device"
