@@ -87,6 +87,14 @@ inference:
     failureThreshold: 5
   strategy: RollingUpdate
 
+grafana:
+  enabled: true
+  adminUser: admin
+  adminPassword: admin
+  datasource:
+    url: https://thanos-querier.openshift-monitoring.svc.cluster.local:9091
+    token: REPLACE_WITH_SA_TOKEN
+
 logging:
   enabled: true
   format: json

@@ -5,11 +5,15 @@ metadata:
   namespace: {{ .Values.namespace }}
   annotations:
     openshift.io/display-name: "vLLM Mistral Medium 3.5 Runtime"
+    opendatahub.io/apiProtocol: REST
+    opendatahub.io/template-display-name: "vLLM NVIDIA GPU ServingRuntime for KServe"
+    opendatahub.io/template-name: vllm-nvidia-gpu-runtime-template
   labels:
     {{- include "mistral.labels" . | nindent 4 }}
     opendatahub.io/dashboard: "true"
 spec:
   annotations:
+    opendatahub.io/kserve-runtime: vllm
     prometheus.io/port: "8000"
     prometheus.io/path: /metrics
     prometheus.io/scrape: "true"

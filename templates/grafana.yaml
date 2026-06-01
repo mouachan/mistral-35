@@ -1,0 +1,23 @@
+{{- if .Values.grafana.enabled }}
+apiVersion: grafana.integreatly.org/v1beta1
+kind: Grafana
+metadata:
+  name: {{ include "mistral.fullname" . }}-grafana
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "mistral.labels" . | nindent 4 }}
+    dashboards: {{ include "mistral.fullname" . }}-grafana
+spec:
+  route:
+    spec:
+      tls:
+        termination: edge
+  config:
+    log:
+      mode: console
+    auth:
+      disable_login_form: "false"
+    security:
+      admin_user: {{ .Values.grafana.adminUser }}
+      admin_password: {{ .Values.grafana.adminPassword }}
+{{- end }}

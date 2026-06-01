@@ -235,6 +235,32 @@ Health check and metrics endpoints are excluded from access logs by default to r
 
 This is controlled by `logging.disableAccessLogEndpoints`.
 
+### Log Output Examples
+
+**Default vLLM logs (without custom logging):**
+
+```
+INFO 06-01 14:32:10 api_server.py:234] vLLM API server started on port 8000
+INFO 06-01 14:32:15 engine.py:112] Loading model mistral-medium-3-5-128b...
+INFO 06-01 14:32:45 metrics.py:89] Avg prompt throughput: 1024.0 tokens/s, Avg generation throughput: 45.2 tokens/s
+```
+
+Plain text logs are human-readable but difficult to parse, filter, and aggregate in centralized logging systems (EFK, Kibana, Splunk).
+
+**With custom JSON logging enabled (default in this chart):**
+
+```json
+{"asctime": "2026-06-01 14:32:10,234", "name": "vllm.entrypoints.openai.api_server", "levelname": "INFO", "message": "vLLM API server started on port 8000", "pathname": "/opt/vllm/vllm/entrypoints/openai/api_server.py", "lineno": 234}
+{"asctime": "2026-06-01 14:32:15,891", "name": "vllm.engine.async_llm_engine", "levelname": "INFO", "message": "Loading model mistral-medium-3-5-128b...", "pathname": "/opt/vllm/vllm/engine.py", "lineno": 112}
+{"asctime": "2026-06-01 14:32:45,567", "name": "vllm.engine.metrics", "levelname": "INFO", "message": "Avg prompt throughput: 1024.0 tokens/s, Avg generation throughput: 45.2 tokens/s", "pathname": "/opt/vllm/vllm/engine/metrics.py", "lineno": 89}
+```
+
+Structured JSON logs enable:
+- **Filtering** by log level, logger name, or source file in Kibana/EFK
+- **Alerting** on specific patterns (e.g., `levelname: "ERROR"`)
+- **Correlation** with request tracing via timestamps and source locations
+- **Noise reduction** via `disableAccessLogEndpoints` which excludes `/health`, `/metrics`, and `/ping` from access logs
+
 ### Important: python-json-logger Dependency
 
 The JSON formatter (`pythonjsonlogger.jsonlogger.JsonFormatter`) requires the `python-json-logger` package. If it is **not pre-installed** in the vLLM image:
@@ -289,6 +315,161 @@ spec:
     server: https://kubernetes.default.svc
     namespace: mistral35
 ```
+
+## RHOAI Dashboard
+
+### Model Deployments
+
+The model appears as **Ready** in the RHOAI Models > Deployments view, with the correct hardware profile (NVIDIA A100 8x GPU) and serving runtime (vLLM NVIDIA GPU ServingRuntime for KServe).
+
+![Model Deployments](docs/model-deployments.png)
+
+## MaaS Integration (Models as a Service)
+
+Once deployed, the model appears in the RHOAI **AI asset endpoints** dashboard and can be added to a **Playground** for interactive testing.
+
+### AI Asset Endpoints
+
+![MaaS Endpoint](docs/maas-endpoint.png)
+
+### Configure Playground
+
+Set **Max tokens** to `32768` (matching the `max-model-len` configured in vLLM).
+
+![Playground Configuration](docs/playground-config.png)
+
+### Playground in Action
+
+**Question:** "comment installer openshift ai soit concis"
+
+![Playground Question](docs/playground-question.png)
+
+**Response:** Complete step-by-step guide with CLI commands and YAML examples.
+
+![Playground Response](docs/playground-response.png)
+
+**Performance metrics:** 8.80s total | 492 tokens | TTFT: 125ms
+
+## Observability Dashboard (Tech Preview)
+
+The RHOAI built-in **Observe & monitor > Dashboard** provides real-time visibility into GPU, CPU, memory, and network usage at both cluster and project level.
+
+![Observability Dashboard](docs/observability-dashboard.png)
+
+Key metrics displayed:
+- **Overview** — System health (100%), deployed models count, GPU utilization (12.5%), request success rate
+- **Cluster resource overview** — GPU utilization, memory allocated, CPU utilization, inbound traffic over time
+- **Project resource usage** — Per-namespace breakdown (GPU, CPU, memory) with the `mistral35` project highlighted
+
+> **Note:** GPU metrics require a `ServiceMonitor` for the NVIDIA DCGM exporter. If GPU utilization shows "No data", create one in the `nvidia-gpu-operator` namespace targeting `app: nvidia-dcgm-exporter` on port `gpu-metrics`.
+
+## Grafana Dashboard
+
+The Helm chart includes an optional Grafana deployment (via the [Grafana Operator](https://github.com/grafana/grafana-operator)) with a pre-configured dashboard for deep observability beyond the RHOAI built-in dashboard.
+
+When `grafana.enabled=true`, the chart deploys:
+- A **Grafana instance** with an OpenShift Route (HTTPS)
+- A **ServiceAccount** with `cluster-monitoring-view` permissions to query Prometheus/Thanos
+- A **GrafanaDatasource** pointing to the OpenShift Thanos Querier
+- A **GrafanaDashboard** loaded from [`grafana/mistral-medium-dashboard.json`](grafana/mistral-medium-dashboard.json)
+
+### Prerequisites
+
+The Grafana Operator must be installed on the cluster before enabling this feature:
+
+```bash
+# Install the Grafana Operator from OperatorHub (AllNamespaces mode)
+# Or via CLI:
+oc apply -f - <<EOF
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: grafana-operator
+  namespace: openshift-operators
+spec:
+  channel: v5
+  name: grafana-operator
+  source: community-operators
+  sourceNamespace: openshift-marketplace
+EOF
+```
+
+### Deployment
+
+```bash
+# Create a ServiceAccount token for Prometheus access
+oc create sa grafana-prometheus -n mistral35
+oc adm policy add-cluster-role-to-user cluster-monitoring-view -z grafana-prometheus -n mistral35
+SA_TOKEN=$(oc create token grafana-prometheus -n mistral35 --duration=87600h)
+
+# Install/upgrade with Grafana enabled
+helm upgrade --install mistral-medium . \
+  --namespace mistral35 \
+  --set secret.hfToken=<your-hf-token> \
+  --set grafana.enabled=true \
+  --set grafana.datasource.token=$SA_TOKEN
+```
+
+### Configuration
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `grafana.enabled` | `true` | Enable/disable Grafana deployment |
+| `grafana.adminUser` | `admin` | Grafana admin username |
+| `grafana.adminPassword` | `admin` | Grafana admin password. **Change in production.** |
+| `grafana.datasource.url` | `https://thanos-querier.openshift-monitoring.svc.cluster.local:9091` | Prometheus/Thanos endpoint |
+| `grafana.datasource.token` | `REPLACE_WITH_SA_TOKEN` | ServiceAccount bearer token. **Pass via `--set` at install time.** |
+
+### Dashboard Sections
+
+The dashboard is organized into 6 sections covering both vLLM application metrics and NVIDIA GPU hardware metrics:
+
+![Grafana — Overview + GPU](docs/grafana-overview-gpu.png)
+
+**Overview** — KPIs at a glance: total requests (8), prompt tokens (277), generation tokens (3016), requests running/waiting, and KV cache usage percentage.
+
+**GPU — NVIDIA DCGM Metrics** — Per-GPU hardware monitoring sourced from the DCGM exporter:
+- GPU utilization (%) with spike visualization during inference
+- GPU memory used (~20.9 GB per GPU for the 128B model in BF16)
+- GPU temperature (50-54 C under load)
+- Power usage (~35 W idle per A100)
+- Tensor core activity (SM Active + Tensor Active)
+
+![Grafana — Latency + Tokens](docs/grafana-latency-tokens.png)
+
+**Latency & Performance** — Real-time latency tracking:
+- Time to First Token: P50 = 87.5 ms, P99 = 99.8 ms
+- Inter-Token Latency: P50 = 17.5 ms (~57 tokens/s generation speed)
+- E2E Latency: P50 = 12.5 s (for 500-token responses)
+- Latency distribution with P50/P99 trendlines (dashed = P99)
+- Request phase breakdown: Queue (150 ms), Prefill (187 ms), Decode (7.04 s)
+
+**Token Throughput** — Token generation analytics:
+- Real-time tokens/s (prompt: 2.10 peak, generation: 28.2 peak)
+- Requests by finish reason: stop (natural end) vs length (max_tokens reached) vs error/abort
+- Cumulative tokens over time (prompt: 277, generation: 3.02K)
+- Finish reason distribution (donut): 63% length, 38% stop
+- Prompt tokens by source (donut): 53% local_compute, 47% local_cache_hit (prefix caching working)
+
+![Grafana — Cache + Interconnect](docs/grafana-cache-interconnect.png)
+
+**Cache & Memory** — KV cache and prefix cache monitoring:
+- KV cache usage gauge (0% when idle, watch for saturation > 90%)
+- KV cache usage over time (mean: 0.005%, max: 0.86% — healthy headroom)
+- Prefix cache hit rate (1.51% mean — increases with repeated prompts)
+
+**GPU Interconnect & PCIe** — Inter-GPU communication for tensor parallelism:
+- NVLink bandwidth (GPU-to-GPU, ~210 B/s idle, 4.25 kB/s peak)
+- PCIe throughput TX/RX (~4 kB/s during inference)
+- DRAM activity and memory copy utilization per GPU
+
+### Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DS_PROMETHEUS` | Prometheus datasource | Auto-detected |
+| `model` | vLLM model name (auto-populated from Prometheus) | `mistral-medium-3-5-128b` |
+| `namespace` | Namespace for DCGM GPU metrics | `nvidia-gpu-operator` |
 
 ## Testing the Deployment
 

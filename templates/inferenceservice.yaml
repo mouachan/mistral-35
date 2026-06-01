@@ -7,10 +7,14 @@ metadata:
     openshift.io/display-name: {{ .Values.model.displayName | quote }}
     opendatahub.io/hardware-profile-name: {{ .Values.hardwareProfile.name }}
     opendatahub.io/hardware-profile-namespace: {{ .Values.hardwareProfile.namespace }}
-    serving.kserve.io/deploymentMode: RawDeployment
+    opendatahub.io/model-type: generative
+    modelFormat: vLLM
+    serving.kserve.io/deploymentMode: Standard
   labels:
     {{- include "mistral.labels" . | nindent 4 }}
     opendatahub.io/dashboard: "true"
+    opendatahub.io/genai-asset: "true"
+    networking.kserve.io/visibility: exposed
 spec:
   predictor:
     {{- if eq .Values.inference.strategy "Recreate" }}

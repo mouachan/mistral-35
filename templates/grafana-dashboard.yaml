@@ -1,0 +1,15 @@
+{{- if .Values.grafana.enabled }}
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: {{ include "mistral.fullname" . }}-vllm-gpu
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "mistral.labels" . | nindent 4 }}
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: {{ include "mistral.fullname" . }}-grafana
+  json: |
+    {{ .Files.Get "grafana/mistral-medium-dashboard.json" | nindent 4 }}
+{{- end }}
