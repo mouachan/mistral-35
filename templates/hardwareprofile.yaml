@@ -1,0 +1,38 @@
+apiVersion: infrastructure.opendatahub.io/v1
+kind: HardwareProfile
+metadata:
+  name: {{ .Values.hardwareProfile.name }}
+  namespace: {{ .Values.hardwareProfile.namespace }}
+  annotations:
+    opendatahub.io/disabled: "false"
+    opendatahub.io/display-name: {{ .Values.hardwareProfile.displayName | quote }}
+  labels:
+    {{- include "mistral.labels" . | nindent 4 }}
+    app.opendatahub.io/hardwareprofile: "true"
+spec:
+  identifiers:
+  - defaultCount: {{ .Values.hardwareProfile.gpu.count }}
+    displayName: NVIDIA GPU
+    identifier: {{ .Values.hardwareProfile.gpu.identifier }}
+    maxCount: {{ .Values.hardwareProfile.gpu.maxCount }}
+    minCount: 1
+    resourceType: Accelerator
+  - defaultCount: {{ .Values.hardwareProfile.cpu.count }}
+    displayName: CPU
+    identifier: cpu
+    maxCount: {{ .Values.hardwareProfile.cpu.maxCount }}
+    minCount: 4
+    resourceType: CPU
+  - defaultCount: {{ .Values.hardwareProfile.memory.count | quote }}
+    displayName: Memory
+    identifier: memory
+    maxCount: {{ .Values.hardwareProfile.memory.maxCount | quote }}
+    minCount: 16Gi
+    resourceType: Memory
+  scheduling:
+    node:
+      nodeSelector:
+        {{- toYaml .Values.hardwareProfile.nodeSelector | nindent 8 }}
+      tolerations:
+        {{- toYaml .Values.hardwareProfile.tolerations | nindent 8 }}
+    type: Node

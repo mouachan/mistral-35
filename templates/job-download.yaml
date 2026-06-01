@@ -1,0 +1,53 @@
+{{- if .Values.download.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "mistral.fullname" . }}-download
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "mistral.labels" . | nindent 4 }}
+  annotations: {}
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: {{ include "mistral.fullname" . }}-download
+    spec:
+      nodeSelector:
+        {{- toYaml .Values.hardwareProfile.nodeSelector | nindent 8 }}
+      tolerations:
+        {{- toYaml .Values.hardwareProfile.tolerations | nindent 8 }}
+      containers:
+      - name: downloader
+        image: {{ .Values.download.image }}
+        env:
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "mistral.fullname" . }}-hf-token
+              key: HF_TOKEN
+        command:
+        - /bin/bash
+        - -c
+        - |
+          echo "=== Disk space ===" && \
+          df -h /models && \
+          pip install -q huggingface_hub && \
+          echo "=== Downloading {{ .Values.model.huggingfaceRepo }} ===" && \
+          hf download {{ .Values.model.huggingfaceRepo }} \
+            --local-dir /models/{{ .Values.model.localDir }} && \
+          echo "=== Download complete ===" && \
+          du -sh /models/{{ .Values.model.localDir }}/ && \
+          ls -lh /models/{{ .Values.model.localDir }}/
+        volumeMounts:
+        - name: model-storage
+          mountPath: /models
+        resources:
+          {{- toYaml .Values.download.resources | nindent 10 }}
+      volumes:
+      - name: model-storage
+        persistentVolumeClaim:
+          claimName: {{ .Values.storage.pvc.name }}
+      restartPolicy: Never
+{{- end }}

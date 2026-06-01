@@ -1,0 +1,114 @@
+namespace: mistral35
+
+model:
+  name: mistral-medium-3-5-128b
+  displayName: "Mistral-Medium-3.5-128B"
+  huggingfaceRepo: "mistralai/Mistral-Medium-3.5-128B"
+  localDir: "Mistral-Medium-3.5-128B"
+
+storage:
+  pvc:
+    name: mistral-medium-3-5-pvc
+    size: 300Gi
+    storageClass: gp3-csi
+    accessMode: ReadWriteOnce
+
+download:
+  enabled: true
+  image: registry.access.redhat.com/ubi9/python-311:latest
+  resources:
+    requests:
+      cpu: "4"
+      memory: 16Gi
+    limits:
+      cpu: "8"
+      memory: 32Gi
+
+secret:
+  hfToken: "REPLACE_WITH_YOUR_HF_TOKEN"
+
+hardwareProfile:
+  name: nvidia-a100-8gpu
+  displayName: "NVIDIA A100 8x GPU (p4d.24xlarge)"
+  namespace: redhat-ods-applications
+  gpu:
+    count: 8
+    maxCount: 8
+    identifier: nvidia.com/gpu
+  cpu:
+    count: 90
+    maxCount: 90
+  memory:
+    count: 1100Gi
+    maxCount: 1100Gi
+  nodeSelector:
+    node-role.kubernetes.io/gpu: ""
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+
+servingRuntime:
+  name: vllm-mistral-medium
+  useRedHatRuntime: true
+  redhat:
+    image: registry.redhat.io/rhaii/vllm-cuda-rhel9@sha256:ad06abf3bb5235ebb5b2df84cd1b9fd09e823f0ff2eebfc82bb4590275ccfe0b
+  custom:
+    image: quay.io/mouachan/vllm-custom:latest
+
+inference:
+  replicas: 1
+  gateway:
+    name: maas-default-gateway
+    namespace: openshift-ingress
+  vllm:
+    tensorParallelSize: 8
+    maxModelLen: 32768
+    gpuMemoryUtilization: 0.90
+    enforceEager: false
+    enablePrefixCaching: true
+    dtype: auto
+    enableAutoToolChoice: true
+    toolCallParser: mistral
+    maxNumBatchedTokens: 16384
+  resources:
+    requests:
+      cpu: "90"
+      memory: 1100Gi
+      gpu: 8
+    limits:
+      cpu: "90"
+      memory: 1100Gi
+      gpu: 8
+  livenessProbe:
+    initialDelaySeconds: 300
+    periodSeconds: 30
+    timeoutSeconds: 30
+    failureThreshold: 5
+  strategy: RollingUpdate
+
+logging:
+  enabled: true
+  format: json
+  level: INFO
+  disableAccessLogEndpoints: "/health,/metrics,/ping"
+  config:
+    version: 1
+    formatters:
+      json:
+        class: pythonjsonlogger.jsonlogger.JsonFormatter
+        format: "%(asctime)s %(name)s %(levelname)s %(message)s %(pathname)s %(lineno)d"
+      plain:
+        format: "%(levelname)s %(asctime)s %(filename)s:%(lineno)d] %(message)s"
+    handlers:
+      console:
+        class: logging.StreamHandler
+        formatter: json
+        level: INFO
+        stream: "ext://sys.stdout"
+    loggers:
+      vllm:
+        handlers:
+          - console
+        level: INFO
+        propagate: false

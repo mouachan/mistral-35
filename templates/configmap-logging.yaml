@@ -1,0 +1,12 @@
+{{- if .Values.logging.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mistral.fullname" . }}-logging-config
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "mistral.labels" . | nindent 4 }}
+data:
+  logging_config.json: |
+    {{- .Values.logging.config | toPrettyJson | nindent 4 }}
+{{- end }}

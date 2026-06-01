@@ -1,0 +1,34 @@
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: {{ include "mistral.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  annotations:
+    openshift.io/display-name: {{ .Values.model.displayName | quote }}
+    opendatahub.io/hardware-profile-name: {{ .Values.hardwareProfile.name }}
+    opendatahub.io/hardware-profile-namespace: {{ .Values.hardwareProfile.namespace }}
+    serving.kserve.io/deploymentMode: RawDeployment
+  labels:
+    {{- include "mistral.labels" . | nindent 4 }}
+    opendatahub.io/dashboard: "true"
+spec:
+  predictor:
+    {{- if eq .Values.inference.strategy "Recreate" }}
+    deploymentStrategy:
+      type: Recreate
+    {{- else }}
+    deploymentStrategy:
+      type: RollingUpdate
+      rollingUpdate:
+        maxSurge: 1
+        maxUnavailable: 0
+    {{- end }}
+    model:
+      modelFormat:
+        name: vLLM
+      runtime: {{ .Values.servingRuntime.name }}
+      storageUri: pvc://{{ .Values.storage.pvc.name }}/{{ .Values.model.localDir }}
+    nodeSelector:
+      {{- toYaml .Values.hardwareProfile.nodeSelector | nindent 6 }}
+    tolerations:
+      {{- toYaml .Values.hardwareProfile.tolerations | nindent 6 }}

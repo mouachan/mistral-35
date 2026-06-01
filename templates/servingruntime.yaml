@@ -1,0 +1,105 @@
+apiVersion: serving.kserve.io/v1alpha1
+kind: ServingRuntime
+metadata:
+  name: {{ .Values.servingRuntime.name }}
+  namespace: {{ .Values.namespace }}
+  annotations:
+    openshift.io/display-name: "vLLM Mistral Medium 3.5 Runtime"
+  labels:
+    {{- include "mistral.labels" . | nindent 4 }}
+    opendatahub.io/dashboard: "true"
+spec:
+  annotations:
+    prometheus.io/port: "8000"
+    prometheus.io/path: /metrics
+    prometheus.io/scrape: "true"
+  multiModel: false
+  supportedModelFormats:
+  - autoSelect: true
+    name: vLLM
+  containers:
+  - name: kserve-container
+    {{- if .Values.servingRuntime.useRedHatRuntime }}
+    image: {{ .Values.servingRuntime.redhat.image }}
+    {{- else }}
+    image: {{ .Values.servingRuntime.custom.image }}
+    {{- end }}
+    command:
+    - python
+    - -m
+    - vllm.entrypoints.openai.api_server
+    args:
+    - "--port=8000"
+    - "--model=/mnt/models"
+    - "--served-model-name={{ .Values.model.name }}"
+    - "--tensor-parallel-size={{ .Values.inference.vllm.tensorParallelSize }}"
+    - "--max-model-len={{ .Values.inference.vllm.maxModelLen }}"
+    - "--gpu-memory-utilization={{ .Values.inference.vllm.gpuMemoryUtilization }}"
+    - "--dtype={{ .Values.inference.vllm.dtype }}"
+    - "--max-num-batched-tokens={{ .Values.inference.vllm.maxNumBatchedTokens }}"
+    {{- if .Values.inference.vllm.enforceEager }}
+    - "--enforce-eager"
+    {{- end }}
+    {{- if .Values.inference.vllm.enablePrefixCaching }}
+    - "--enable-prefix-caching"
+    {{- end }}
+    {{- if .Values.inference.vllm.enableAutoToolChoice }}
+    - "--enable-auto-tool-choice"
+    - "--tool-call-parser={{ .Values.inference.vllm.toolCallParser }}"
+    {{- end }}
+    {{- if .Values.logging.enabled }}
+    - "--disable-access-log-for-endpoints={{ .Values.logging.disableAccessLogEndpoints }}"
+    {{- end }}
+    env:
+    {{- if .Values.logging.enabled }}
+    - name: VLLM_LOGGING_CONFIG_PATH
+      value: /etc/vllm/logging_config.json
+    {{- end }}
+    - name: HF_HUB_OFFLINE
+      value: "1"
+    ports:
+    - containerPort: 8000
+      name: http
+      protocol: TCP
+    livenessProbe:
+      httpGet:
+        path: /health
+        port: http
+      initialDelaySeconds: {{ .Values.inference.livenessProbe.initialDelaySeconds }}
+      periodSeconds: {{ .Values.inference.livenessProbe.periodSeconds }}
+      timeoutSeconds: {{ .Values.inference.livenessProbe.timeoutSeconds }}
+      failureThreshold: {{ .Values.inference.livenessProbe.failureThreshold }}
+    readinessProbe:
+      httpGet:
+        path: /health
+        port: http
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      timeoutSeconds: 10
+    resources:
+      requests:
+        cpu: {{ .Values.inference.resources.requests.cpu | quote }}
+        memory: {{ .Values.inference.resources.requests.memory }}
+        nvidia.com/gpu: {{ .Values.inference.resources.requests.gpu }}
+      limits:
+        cpu: {{ .Values.inference.resources.limits.cpu | quote }}
+        memory: {{ .Values.inference.resources.limits.memory }}
+        nvidia.com/gpu: {{ .Values.inference.resources.limits.gpu }}
+    volumeMounts:
+    - name: shm
+      mountPath: /dev/shm
+    {{- if .Values.logging.enabled }}
+    - name: logging-config
+      mountPath: /etc/vllm
+      readOnly: true
+    {{- end }}
+  volumes:
+  - name: shm
+    emptyDir:
+      medium: Memory
+      sizeLimit: 12Gi
+  {{- if .Values.logging.enabled }}
+  - name: logging-config
+    configMap:
+      name: {{ include "mistral.fullname" . }}-logging-config
+  {{- end }}

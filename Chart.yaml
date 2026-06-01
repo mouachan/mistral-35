@@ -1,0 +1,13 @@
+apiVersion: v2
+name: mistral-medium-3-5
+description: Helm chart for deploying Mistral Medium 3.5 128B on OpenShift AI (RHOAI)
+type: application
+version: 0.1.0
+appVersion: "3.5"
+keywords:
+  - mistral
+  - vllm
+  - openshift-ai
+  - rhoai
+  - llm
+  - inference
