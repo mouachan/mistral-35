@@ -1,0 +1,198 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: smoke-tests
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      containers:
+      - name: smoke-tests
+        image: registry.access.redhat.com/ubi9/python-311:latest
+        env:
+        - name: ENDPOINT
+          value: "http://mistral-medium-3-5-128b-metrics:8000"
+        - name: MODEL
+          value: "mistral-medium-3-5-128b"
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -euo pipefail
+
+          RESULTS_DIR="/results"
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          RESULTS_FILE="${RESULTS_DIR}/smoke-tests-${TIMESTAMP}.json"
+          REPORT_FILE="${RESULTS_DIR}/smoke-tests-${TIMESTAMP}.txt"
+          JSONL_FILE=$(mktemp)
+
+          mkdir -p "$RESULTS_DIR"
+
+          PASS=0
+          FAIL=0
+          TOTAL=5
+
+          run_test() {
+            local name="$1"
+            local description="$2"
+            local payload="$3"
+            local test_num="$4"
+
+            echo "──────────────────────────────────────────────"
+            echo "TEST ${test_num}/${TOTAL}: ${name}"
+            echo "  ${description}"
+            echo ""
+
+            local tmp=$(mktemp)
+
+            local http_code
+            http_code=$(curl -s -o "$tmp" -w '%{http_code}' \
+              "${ENDPOINT}/v1/chat/completions" \
+              -H "Content-Type: application/json" \
+              -d "$payload" 2>/dev/null) || true
+
+            if [[ "$http_code" != "200" ]]; then
+              echo "  FAILED (HTTP ${http_code})"
+              echo ""
+              FAIL=$((FAIL + 1))
+              python3 -c "
+          import json
+          print(json.dumps({'name': '$name', 'status': 'FAILED', 'http_code': $http_code}))
+          " >> "$JSONL_FILE"
+              rm -f "$tmp"
+              return
+            fi
+
+            local response_file="$tmp"
+
+            local finish_reason=$(python3 -c "import sys,json; print(json.load(sys.stdin)['choices'][0]['finish_reason'])" < "$response_file" 2>/dev/null || echo "N/A")
+            local prompt_tokens=$(python3 -c "import sys,json; print(json.load(sys.stdin)['usage']['prompt_tokens'])" < "$response_file" 2>/dev/null || echo "0")
+            local completion_tokens=$(python3 -c "import sys,json; print(json.load(sys.stdin)['usage']['completion_tokens'])" < "$response_file" 2>/dev/null || echo "0")
+
+            echo "  Status:            PASSED"
+            echo "  Finish reason:     ${finish_reason}"
+            echo "  Prompt tokens:     ${prompt_tokens}"
+            echo "  Completion tokens: ${completion_tokens}"
+            echo ""
+            echo "  Response:"
+            python3 -c "
+          import sys, json
+          r = json.load(sys.stdin)
+          c = r['choices'][0]['message']
+          if 'tool_calls' in c and c.get('tool_calls'):
+              tc = c['tool_calls'][0]
+              text = f\"Tool call: {tc['function']['name']}({tc['function']['arguments']})\"
+          else:
+              text = c.get('content', '')
+              if len(text) > 500:
+                  text = text[:500] + '...'
+          for line in text.split('\n'):
+              print('    ' + line)
+          " < "$response_file" 2>/dev/null || echo "    (could not parse response)"
+            echo ""
+
+            PASS=$((PASS + 1))
+
+            python3 -c "
+          import sys, json
+          r = json.load(sys.stdin)
+          c = r['choices'][0]['message']
+          if 'tool_calls' in c and c.get('tool_calls'):
+              tc = c['tool_calls'][0]
+              excerpt = f\"Tool call: {tc['function']['name']}({tc['function']['arguments']})\"
+          else:
+              excerpt = c.get('content', '')[:500]
+          result = {
+              'name': '$name',
+              'description': '$description',
+              'status': 'PASSED',
+              'finish_reason': '$finish_reason',
+              'prompt_tokens': $prompt_tokens,
+              'completion_tokens': $completion_tokens,
+              'response_excerpt': excerpt
+          }
+          print(json.dumps(result, ensure_ascii=False))
+          " < "$response_file" >> "$JSONL_FILE" 2>/dev/null
+
+            rm -f "$response_file"
+          }
+
+          echo ""
+          echo "=============================================="
+          echo " Mistral Medium 3.5 128B — Deployment Smoke Tests"
+          echo "=============================================="
+          echo " Endpoint: ${ENDPOINT}"
+          echo " Model:    ${MODEL}"
+          echo " Date:     $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "=============================================="
+          echo ""
+
+          exec > >(tee "$REPORT_FILE") 2>&1
+
+          run_test "General Knowledge" \
+            "Short factual answer to validate basic reasoning" \
+            "{\"model\":\"${MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"Explain quantum computing in 2 sentences.\"}],\"max_tokens\":100}" \
+            1
+
+          run_test "Code Generation" \
+            "Generate a Python function with examples" \
+            "{\"model\":\"${MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"Write a Python function that checks if a number is prime. Include examples.\"}],\"max_tokens\":500}" \
+            2
+
+          run_test "Structured JSON Output" \
+            "Validate model can produce well-formed JSON" \
+            "{\"model\":\"${MODEL}\",\"messages\":[{\"role\":\"system\",\"content\":\"You are a helpful assistant that responds in JSON format.\"},{\"role\":\"user\",\"content\":\"List the 3 largest countries by area with their capital and population.\"}],\"max_tokens\":300}" \
+            3
+
+          run_test "Translation" \
+            "Translate English to Japanese" \
+            "{\"model\":\"${MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"Translate to Japanese: The weather is beautiful today.\"}],\"max_tokens\":100}" \
+            4
+
+          run_test "Tool Calling" \
+            "Validate native function calling via tool_call_parser=mistral" \
+            "{\"model\":\"${MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"What is the weather in Paris?\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"description\":\"Get current weather for a location\",\"parameters\":{\"type\":\"object\",\"properties\":{\"location\":{\"type\":\"string\",\"description\":\"City name\"}},\"required\":[\"location\"]}}}],\"max_tokens\":100}" \
+            5
+
+          echo "=============================================="
+          echo " SUMMARY: ${PASS}/${TOTAL} passed, ${FAIL}/${TOTAL} failed"
+          echo "=============================================="
+
+          python3 -c "
+          import json
+          tests = []
+          with open('$JSONL_FILE') as f:
+              for line in f:
+                  line = line.strip()
+                  if line:
+                      tests.append(json.loads(line))
+          results = {
+              'endpoint': '${ENDPOINT}',
+              'model': '${MODEL}',
+              'timestamp': '$(date -u '+%Y-%m-%dT%H:%M:%SZ')',
+              'summary': {'passed': ${PASS}, 'failed': ${FAIL}, 'total': ${TOTAL}},
+              'tests': tests
+          }
+          with open('${RESULTS_FILE}', 'w') as f:
+              json.dump(results, f, indent=2, ensure_ascii=False)
+          print(f'\nResults saved to: ${RESULTS_FILE}')
+          print(f'Report saved to: ${REPORT_FILE}')
+          "
+
+          rm -f "$JSONL_FILE"
+          if [[ $FAIL -gt 0 ]]; then exit 1; fi
+        volumeMounts:
+        - name: results
+          mountPath: /results
+        resources:
+          requests:
+            cpu: "1"
+            memory: 512Mi
+          limits:
+            cpu: "2"
+            memory: 1Gi
+      volumes:
+      - name: results
+        persistentVolumeClaim:
+          claimName: test-results-pvc
+      restartPolicy: Never

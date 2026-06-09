@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: evalhub
+  labels:
+    app.kubernetes.io/name: evalhub
+    app.kubernetes.io/part-of: rhoai-evaluation

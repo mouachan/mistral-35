@@ -1,0 +1,127 @@
+──────────────────────────────────────────────
+TEST 1/5: General Knowledge
+  Short factual answer to validate basic reasoning
+
+  Status:            PASSED
+  Finish reason:     stop
+  Prompt tokens:     24
+  Completion tokens: 78
+  TTFT:              1656.1 ms
+  Total time:        1656.2 ms
+  Tokens/s:          47.1
+
+  Response:
+    Quantum computing uses **quantum bits (qubits)** that can exist in **superpositions** of states (0 and 1 simultaneously) and leverage **entanglement** to perform complex calculations exponentially faster than classical computers for specific problems. By harnessing quantum mechanics principles like interference and decherence control, it enables breakthroughs in fields like cryptography, optimization, and drug discovery.
+
+──────────────────────────────────────────────
+TEST 2/5: Code Generation
+  Generate a Python function with examples
+
+  Status:            PASSED
+  Finish reason:     length
+  Prompt tokens:     30
+  Completion tokens: 500
+  TTFT:              10306.0 ms
+  Total time:        10306.1 ms
+  Tokens/s:          48.5
+
+  Response:
+    # Python Function to Check if a Number is Prime
+    
+    Here's a Python function that checks whether a given number is prime, along with examples of its usage:
+    
+    ```python
+    def is_prime(n):
+        """
+        Check if a number is prime.
+    
+        Args:
+            n (int): The number to check
+    
+        Returns:
+            bool: True if the number is prime, False otherwise
+        """
+        # Handle edge cases
+        if n <= 1:
+            return False
+        if n <= 3:
+            return True
+        if n % 2 == 0 or n % 3 == 0:
+            return False
+    
+    ...
+
+──────────────────────────────────────────────
+TEST 3/5: Structured JSON Output
+  Validate model can produce well-formed JSON
+
+  Status:            PASSED
+  Finish reason:     stop
+  Prompt tokens:     42
+  Completion tokens: 203
+  TTFT:              4188.3 ms
+  Total time:        4188.4 ms
+  Tokens/s:          48.5
+
+  Response:
+    ```json
+    {
+      "largest_countries_by_area": [
+        {
+          "country": "Russia",
+          "area_sq_km": 17098242,
+          "capital": "Moscow",
+          "population": 145934462
+        },
+        {
+          "country": "Canada",
+          "area_sq_km": 9984670,
+          "capital": "Ottawa",
+          "population": 37742154
+        },
+        {
+          "country": "United States",
+          "area_sq_km": 9833517,
+          "capital": "Washington, D.C.",
+          "population": 331002651
+        }
+      ],
+      "note": "Area and population data based on latest availa...
+
+──────────────────────────────────────────────
+TEST 4/5: Translation
+  Translate English to Japanese
+
+  Status:            PASSED
+  Finish reason:     stop
+  Prompt tokens:     25
+  Completion tokens: 31
+  TTFT:              646.3 ms
+  Total time:        646.4 ms
+  Tokens/s:          48.0
+
+  Response:
+    Today's weather is beautiful.
+    今日（きょう）は天気（てんき）がとても良い（よい）です。
+
+──────────────────────────────────────────────
+TEST 5/5: Tool Calling
+  Validate native function calling via tool_call_parser=mistral
+
+  Status:            PASSED
+  Finish reason:     tool_calls
+  Prompt tokens:     90
+  Completion tokens: 12
+  TTFT:              259.5 ms
+  Total time:        259.7 ms
+  Tokens/s:          46.2
+
+  Response:
+    Tool call: get_weather({"location": "Paris"})
+
+==============================================
+ SUMMARY: 5/5 passed, 0/5 failed
+==============================================
+
+Results saved to: /results/smoke-tests-20260605-074231.json
+Report saved to: /results/smoke-tests-20260605-074231.txt

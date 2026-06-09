@@ -1,0 +1,496 @@
+#!/usr/bin/env python3
+"""
+GuideLLM Adapter for eval-hub (custom build with MLflow fix).
+
+Based on quay.io/evalhub/community-guidellm:latest with explicit
+callbacks.mlflow.save() call to create MLflow runs.
+"""
+
+import certifi
+import json
+import logging
+import os
+import subprocess
+import sys
+import tempfile
+import time
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from evalhub.adapter import (
+    ErrorInfo,
+    EvaluationResult,
+    FrameworkAdapter,
+    JobCallbacks,
+    JobPhase,
+    JobResults,
+    JobSpec,
+    JobStatus,
+    JobStatusUpdate,
+    MessageInfo,
+    OCIArtifactSpec,
+)
+from evalhub.adapter.auth import resolve_model_credentials
+
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+logging.basicConfig(
+    level=LOG_LEVEL,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+
+class GuideLLMAdapter(FrameworkAdapter):
+    def __init__(self, job_spec_path: Optional[str] = None):
+        super().__init__(job_spec_path=job_spec_path)
+        self.results_dir: Optional[Path] = None
+        logger.info("GuideLLM adapter initialized")
+
+    def run_benchmark_job(self, config: JobSpec, callbacks: JobCallbacks) -> JobResults:
+        start_time = time.time()
+        logger.info(f"Starting GuideLLM benchmark job: {config.id}")
+
+        callbacks.report_status(
+            JobStatusUpdate(
+                status=JobStatus.RUNNING,
+                phase=JobPhase.INITIALIZING,
+                progress=0.0,
+                message=MessageInfo(
+                    message="Initializing GuideLLM benchmark",
+                    message_code="initializing",
+                ),
+            )
+        )
+
+        try:
+            self.results_dir = Path(tempfile.mkdtemp(prefix="guidellm_results_"))
+            logger.info(f"Results directory: {self.results_dir}")
+
+            cmd = self._build_guidellm_command(config)
+            logger.info(f"Running command: {' '.join(cmd)}")
+
+            callbacks.report_status(
+                JobStatusUpdate(
+                    status=JobStatus.RUNNING,
+                    phase=JobPhase.RUNNING_EVALUATION,
+                    progress=0.3,
+                    message=MessageInfo(
+                        message="Executing performance benchmark",
+                        message_code="running_evaluation",
+                    ),
+                )
+            )
+
+            self._run_guidellm(cmd)
+
+            callbacks.report_status(
+                JobStatusUpdate(
+                    status=JobStatus.RUNNING,
+                    phase=JobPhase.POST_PROCESSING,
+                    progress=0.8,
+                    message=MessageInfo(
+                        message="Processing benchmark results",
+                        message_code="post_processing",
+                    ),
+                )
+            )
+
+            results_data = self._parse_results(config)
+
+            overall_score = results_data.get("requests_per_second")
+
+            evaluation_results = []
+
+            if "requests_per_second" in results_data:
+                evaluation_results.append(
+                    EvaluationResult(
+                        metric_name="requests_per_second",
+                        metric_value=results_data["requests_per_second"],
+                        metric_type="throughput",
+                    )
+                )
+
+            if "prompt_tokens_per_second" in results_data:
+                evaluation_results.append(
+                    EvaluationResult(
+                        metric_name="prompt_tokens_per_second",
+                        metric_value=results_data["prompt_tokens_per_second"],
+                        metric_type="throughput",
+                    )
+                )
+
+            if "output_tokens_per_second" in results_data:
+                evaluation_results.append(
+                    EvaluationResult(
+                        metric_name="output_tokens_per_second",
+                        metric_value=results_data["output_tokens_per_second"],
+                        metric_type="throughput",
+                    )
+                )
+
+            if "mean_ttft_ms" in results_data:
+                evaluation_results.append(
+                    EvaluationResult(
+                        metric_name="mean_ttft_ms",
+                        metric_value=results_data["mean_ttft_ms"],
+                        metric_type="latency",
+                    )
+                )
+
+            if "mean_itl_ms" in results_data:
+                evaluation_results.append(
+                    EvaluationResult(
+                        metric_name="mean_itl_ms",
+                        metric_value=results_data["mean_itl_ms"],
+                        metric_type="latency",
+                    )
+                )
+
+            duration = time.time() - start_time
+
+            results = JobResults(
+                id=config.id,
+                benchmark_id=config.benchmark_id,
+                benchmark_index=config.benchmark_index,
+                model_name=config.model.name,
+                results=evaluation_results,
+                overall_score=overall_score,
+                num_examples_evaluated=results_data.get("total_requests", 0),
+                duration_seconds=duration,
+                completed_at=datetime.now(UTC),
+                evaluation_metadata={
+                    "framework": "guidellm",
+                    "profile": config.parameters.get("profile", "sweep"),
+                    "request_type": config.parameters.get("request_type", "chat_completions"),
+                },
+            )
+
+            oci_artifact = self._report_artifacts(config, callbacks)
+            if oci_artifact:
+                results.oci_artifact = oci_artifact
+
+            logger.info(f"Benchmark completed successfully: {config.id}")
+
+            return results
+
+        except Exception as e:
+            error_msg = f"Benchmark failed: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            callbacks.report_status(
+                JobStatusUpdate(
+                    status=JobStatus.FAILED,
+                    message=MessageInfo(
+                        message=error_msg,
+                        message_code="failed",
+                    ),
+                    error=ErrorInfo(
+                        message=error_msg,
+                        message_code="benchmark_error",
+                    ),
+                    error_details={
+                        "exception_type": type(e).__name__,
+                        "benchmark_id": config.benchmark_id,
+                    },
+                )
+            )
+            raise
+
+    def _build_guidellm_command(self, job_spec: JobSpec) -> List[str]:
+        config = job_spec.parameters
+        model = job_spec.model
+
+        cmd = [
+            "guidellm",
+            "benchmark",
+            "--target", model.url,
+            "--output-path", str(self.results_dir),
+        ]
+
+        profile = config.get("profile", "sweep")
+        cmd.extend(["--profile", profile])
+
+        if "rate" in config:
+            cmd.extend(["--rate", str(config["rate"])])
+
+        if "max_seconds" in config:
+            cmd.extend(["--max-seconds", str(config["max_seconds"])])
+
+        max_requests = config.get("max_requests")
+        if max_requests is None and job_spec.num_examples is not None:
+            max_requests = job_spec.num_examples
+            logger.info(f"Using num_examples={max_requests} as max_requests")
+
+        if max_requests is not None:
+            cmd.extend(["--max-requests", str(max_requests)])
+
+        if "max_errors" in config:
+            cmd.extend(["--max-errors", str(config["max_errors"])])
+
+        if "warmup" in config:
+            warmup = config["warmup"]
+            if isinstance(warmup, str) and warmup.endswith("%"):
+                warmup = warmup.rstrip("%")
+            cmd.extend(["--warmup", str(warmup)])
+
+        if "cooldown" in config:
+            cooldown = config["cooldown"]
+            if isinstance(cooldown, str) and cooldown.endswith("%"):
+                cooldown = cooldown.rstrip("%")
+            cmd.extend(["--cooldown", str(cooldown)])
+
+        if config.get("detect_saturation", False):
+            cmd.append("--detect-saturation")
+
+        data = config.get("data", "prompt_tokens=256,output_tokens=128")
+        cmd.extend(["--data", data])
+
+        if "data_args" in config:
+            cmd.extend(["--data-args", json.dumps(config["data_args"])])
+
+        if "data_column_mapper" in config:
+            cmd.extend(["--data-column-mapper", json.dumps(config["data_column_mapper"])])
+
+        if "data_samples" in config:
+            cmd.extend(["--data-samples", str(config["data_samples"])])
+
+        request_type = config.get("request_type", "chat_completions")
+        cmd.extend(["--request-type", request_type])
+
+        if model.name:
+            cmd.extend(["--model", model.name])
+
+        processor = config.get("processor")
+        if processor is None and "prompt_tokens=" in data and "output_tokens=" in data:
+            processor = "gpt2"
+            logger.info(
+                f"No processor specified for synthetic data. Using default '{processor}'."
+            )
+
+        if processor:
+            cmd.extend(["--processor", processor])
+
+        if "backend_kwargs" in config:
+            cmd.extend(["--backend-kwargs", json.dumps(config["backend_kwargs"])])
+
+        cmd.extend(["--outputs", "json,csv,html,yaml"])
+
+        logger.debug(f"Built GuideLLM command: {' '.join(cmd)}")
+        return cmd
+
+    def _run_guidellm(self, cmd: List[str]) -> None:
+        ca_bundle_path = None
+        try:
+            env = os.environ.copy()
+
+            env.setdefault(
+                "GUIDELLM__REPORT_GENERATION__SOURCE",
+                "https://raw.githubusercontent.com/vllm-project/guidellm/"
+                "refs/heads/gh-pages/ui/v0.5.3/index.html",
+            )
+
+            creds = resolve_model_credentials()
+
+            if creds.ca_cert_path:
+                combined = tempfile.NamedTemporaryFile(
+                    suffix=".pem", delete=False, mode="wb"
+                )
+                with open(certifi.where(), "rb") as f:
+                    combined.write(f.read())
+                with open(creds.ca_cert_path, "rb") as f:
+                    combined.write(f.read())
+                combined.close()
+                ca_bundle_path = combined.name
+                env["REQUESTS_CA_BUNDLE"] = ca_bundle_path
+                env["SSL_CERT_FILE"] = ca_bundle_path
+                logger.info("TLS: using CA cert from model auth secret")
+
+            api_key = creds.api_key
+            if not api_key:
+                auth_value = creds.auth_headers.get("Authorization", "")
+                if auth_value.startswith("Bearer "):
+                    api_key = auth_value.removeprefix("Bearer ").strip()
+
+            if api_key:
+                if "--backend-kwargs" in cmd:
+                    idx = cmd.index("--backend-kwargs")
+                    existing = json.loads(cmd[idx + 1])
+                    existing.setdefault("api_key", api_key)
+                    cmd[idx + 1] = json.dumps(existing)
+                else:
+                    cmd.extend(["--backend-kwargs", json.dumps({"api_key": api_key})])
+                logger.info("Auth: injected API key into guidellm --backend-kwargs")
+
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                env=env,
+            )
+
+            if process.stdout:
+                for line in process.stdout:
+                    line = line.rstrip()
+                    if line:
+                        logger.info(f"GuideLLM: {line}")
+
+            return_code = process.wait()
+            if return_code != 0:
+                raise RuntimeError(f"GuideLLM failed with exit code {return_code}")
+
+        except Exception as e:
+            logger.error(f"Failed to execute GuideLLM: {e}")
+            raise
+        finally:
+            if ca_bundle_path:
+                os.unlink(ca_bundle_path)
+
+    def _parse_results(self, job_spec: JobSpec) -> Dict[str, Any]:
+        if not self.results_dir:
+            raise RuntimeError("Results directory not initialized")
+
+        results_file = self.results_dir / "benchmarks.json"
+        if not results_file.exists():
+            raise FileNotFoundError(f"Results file not found: {results_file}")
+
+        logger.info(f"Parsing results from: {results_file}")
+        with open(results_file, "r") as f:
+            raw_results = json.load(f)
+
+        metrics: Dict[str, Any] = {
+            "framework": "guidellm",
+            "benchmark_id": job_spec.benchmark_id,
+        }
+
+        if "benchmarks" in raw_results and raw_results["benchmarks"]:
+            benchmark_metrics = raw_results["benchmarks"][0].get("metrics", {})
+
+            if "requests_per_second" in benchmark_metrics:
+                rps = benchmark_metrics["requests_per_second"].get("successful", {})
+                if "mean" in rps:
+                    metrics["requests_per_second"] = rps["mean"]
+
+            if "prompt_tokens_per_second" in benchmark_metrics:
+                pts = benchmark_metrics["prompt_tokens_per_second"].get("successful", {})
+                if "mean" in pts:
+                    metrics["prompt_tokens_per_second"] = pts["mean"]
+
+            if "output_tokens_per_second" in benchmark_metrics:
+                ots = benchmark_metrics["output_tokens_per_second"].get("successful", {})
+                if "mean" in ots:
+                    metrics["output_tokens_per_second"] = ots["mean"]
+
+            if "time_to_first_token_ms" in benchmark_metrics:
+                ttft = benchmark_metrics["time_to_first_token_ms"].get("successful", {})
+                if "mean" in ttft:
+                    metrics["mean_ttft_ms"] = ttft["mean"]
+
+            if "inter_token_latency_ms" in benchmark_metrics:
+                itl = benchmark_metrics["inter_token_latency_ms"].get("successful", {})
+                if "mean" in itl:
+                    metrics["mean_itl_ms"] = itl["mean"]
+
+            if "request_totals" in benchmark_metrics:
+                totals = benchmark_metrics["request_totals"]
+                metrics["total_requests"] = totals.get("successful", 0)
+
+            metrics["benchmark_count"] = len(raw_results.get("benchmarks", []))
+
+        logger.info(f"Extracted metrics: {json.dumps(metrics, indent=2)}")
+        self._full_results = raw_results
+        return metrics
+
+    def _report_artifacts(self, config: JobSpec, callbacks: JobCallbacks):
+        if not self.results_dir:
+            logger.warning("No results directory available for artifact reporting")
+            return None
+
+        output_files = list(self.results_dir.glob("benchmarks.*"))
+        if not output_files:
+            logger.warning("No output files found in results directory")
+            return None
+
+        oci_exports = config.exports.oci if config.exports else None
+        if oci_exports is None:
+            logger.info("No OCI exports configured; skipping artifact persistence")
+            return None
+
+        logger.info(f"Creating OCI artifact with {len(output_files)} files")
+        coords = oci_exports.coordinates.model_copy(deep=True)
+        coords.annotations.update(
+            {
+                "org.opencontainers.image.created": datetime.now(UTC).isoformat(),
+                "io.github.eval-hub.benchmark": config.benchmark_id,
+                "io.github.eval-hub.model": config.model.name,
+                "io.github.eval-hub.job_id": config.id,
+            }
+        )
+
+        oci_artifact = callbacks.create_oci_artifact(
+            OCIArtifactSpec(
+                files_path=self.results_dir,
+                coordinates=coords,
+            )
+        )
+        logger.info(f"OCI artifact created: {oci_artifact.reference}")
+        return oci_artifact
+
+
+def main() -> None:
+    from evalhub.adapter import DefaultCallbacks
+
+    log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+    logging.basicConfig(
+        level=getattr(logging, log_level, logging.INFO),
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+
+    try:
+        job_spec_path = os.getenv("EVALHUB_JOB_SPEC_PATH", "/meta/job.json")
+        adapter = GuideLLMAdapter(job_spec_path=job_spec_path)
+
+        logger.info(f"Loaded job {adapter.job_spec.id}")
+        logger.info(f"Benchmark: {adapter.job_spec.benchmark_id}")
+        logger.info(f"Model: {adapter.job_spec.model.name}")
+
+        callbacks = DefaultCallbacks.from_adapter(adapter)
+
+        results = adapter.run_benchmark_job(adapter.job_spec, callbacks)
+
+        # --- MLflow integration fix ---
+        # The community image relies on DefaultCallbacks or the server
+        # to create MLflow runs, but neither does it in EvalHub v0.4.x.
+        # Explicitly save results to MLflow via the SDK callbacks.
+        if hasattr(callbacks, "mlflow") and callbacks.mlflow is not None:
+            try:
+                logger.info("Saving results to MLflow...")
+                mlflow_run_id = callbacks.mlflow.save(results, adapter.job_spec)
+                if mlflow_run_id:
+                    results.mlflow_run_id = mlflow_run_id
+                    logger.info(f"MLflow run created: {mlflow_run_id}")
+                else:
+                    logger.warning("MLflow save returned no run ID")
+            except Exception as e:
+                logger.warning(f"MLflow save failed (non-fatal): {e}")
+        else:
+            logger.info("MLflow callbacks not available, skipping")
+
+        callbacks.report_results(results)
+
+        logger.info(f"Job completed successfully: {results.id}")
+        if results.overall_score:
+            logger.info(f"Overall score: {results.overall_score:.2f} requests/sec")
+        logger.info(f"Evaluated {results.num_examples_evaluated} requests")
+        logger.info(f"Duration: {results.duration_seconds:.2f} seconds")
+
+        sys.exit(0)
+
+    except Exception as e:
+        logger.error(f"Fatal error in GuideLLM adapter: {e}", exc_info=True)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

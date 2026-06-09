@@ -1,0 +1,77 @@
+{
+  "endpoint": "http://mistral-medium-3-5-128b-metrics:8000",
+  "model": "mistral-medium-3-5-128b",
+  "timestamp": "2026-06-05T07:42:49Z",
+  "summary": {
+    "passed": 5,
+    "failed": 0,
+    "total": 5
+  },
+  "tests": [
+    {
+      "name": "General Knowledge",
+      "description": "Short factual answer to validate basic reasoning",
+      "status": "PASSED",
+      "finish_reason": "stop",
+      "prompt_tokens": 24,
+      "completion_tokens": 78,
+      "total_tokens": 102,
+      "ttft_ms": 1656.1,
+      "total_ms": 1656.2,
+      "tokens_per_sec": 47.1,
+      "response_excerpt": "Quantum computing uses **quantum bits (qubits)** that can exist in **superpositions** of states (0 and 1 simultaneously) and leverage **entanglement** to perform complex calculations exponentially faster than classical computers for specific problems. By harnessing quantum mechanics principles like interference and decherence control, it enables breakthroughs in fields like cryptography, optimization, and drug discovery."
+    },
+    {
+      "name": "Code Generation",
+      "description": "Generate a Python function with examples",
+      "status": "PASSED",
+      "finish_reason": "length",
+      "prompt_tokens": 30,
+      "completion_tokens": 500,
+      "total_tokens": 530,
+      "ttft_ms": 10306.0,
+      "total_ms": 10306.1,
+      "tokens_per_sec": 48.5,
+      "response_excerpt": "# Python Function to Check if a Number is Prime\n\nHere's a Python function that checks whether a given number is prime, along with examples of its usage:\n\n```python\ndef is_prime(n):\n    \"\"\"\n    Check if a number is prime.\n\n    Args:\n        n (int): The number to check\n\n    Returns:\n        bool: True if the number is prime, False otherwise\n    \"\"\"\n    # Handle edge cases\n    if n <= 1:\n        return False\n    if n <= 3:\n        return True\n    if n % 2 == 0 or n % 3 == 0:\n        return False\n\n"
+    },
+    {
+      "name": "Structured JSON Output",
+      "description": "Validate model can produce well-formed JSON",
+      "status": "PASSED",
+      "finish_reason": "stop",
+      "prompt_tokens": 42,
+      "completion_tokens": 203,
+      "total_tokens": 245,
+      "ttft_ms": 4188.3,
+      "total_ms": 4188.4,
+      "tokens_per_sec": 48.5,
+      "response_excerpt": "```json\n{\n  \"largest_countries_by_area\": [\n    {\n      \"country\": \"Russia\",\n      \"area_sq_km\": 17098242,\n      \"capital\": \"Moscow\",\n      \"population\": 145934462\n    },\n    {\n      \"country\": \"Canada\",\n      \"area_sq_km\": 9984670,\n      \"capital\": \"Ottawa\",\n      \"population\": 37742154\n    },\n    {\n      \"country\": \"United States\",\n      \"area_sq_km\": 9833517,\n      \"capital\": \"Washington, D.C.\",\n      \"population\": 331002651\n    }\n  ],\n  \"note\": \"Area and population data based on latest availa"
+    },
+    {
+      "name": "Translation",
+      "description": "Translate English to Japanese",
+      "status": "PASSED",
+      "finish_reason": "stop",
+      "prompt_tokens": 25,
+      "completion_tokens": 31,
+      "total_tokens": 56,
+      "ttft_ms": 646.3,
+      "total_ms": 646.4,
+      "tokens_per_sec": 48.0,
+      "response_excerpt": "Today's weather is beautiful.\n今日（きょう）は天気（てんき）がとても良い（よい）です。"
+    },
+    {
+      "name": "Tool Calling",
+      "description": "Validate native function calling via tool_call_parser=mistral",
+      "status": "PASSED",
+      "finish_reason": "tool_calls",
+      "prompt_tokens": 90,
+      "completion_tokens": 12,
+      "total_tokens": 102,
+      "ttft_ms": 259.5,
+      "total_ms": 259.7,
+      "tokens_per_sec": 46.2,
+      "response_excerpt": "Tool call: get_weather({\"location\": \"Paris\"})"
+    }
+  ]
+}

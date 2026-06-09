@@ -95,6 +95,28 @@ grafana:
     url: https://thanos-querier.openshift-monitoring.svc.cluster.local:9091
     token: REPLACE_WITH_SA_TOKEN
 
+# ---------------------------------------------------------------------------
+# Benchmark — GuideLLM performance benchmark via EvalHub
+# ---------------------------------------------------------------------------
+# Requires EvalHub deployed in the cluster (see evalhub/ directory).
+# The job is submitted to EvalHub API which creates the benchmark
+# pod in this namespace (tenant namespace).
+# ---------------------------------------------------------------------------
+benchmark:
+  enabled: false
+  evalhub:
+    url: "https://evalhub.redhat-ods-applications.svc.cluster.local:8443"
+  experiment: "benchmark-mistral-3.5"
+  provider: guidellm
+  benchmarkId: throughput
+  resources:
+    requests:
+      cpu: "2"
+      memory: 2Gi
+    limits:
+      cpu: "4"
+      memory: 4Gi
+
 logging:
   enabled: true
   format: json

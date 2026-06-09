@@ -1,0 +1,34 @@
+
+──────────────────────────────────────────────
+TEST 1/5: General Knowledge
+  Short factual answer to validate basic reasoning
+
+  FAILED (HTTP 000)
+
+──────────────────────────────────────────────
+TEST 2/5: Code Generation
+  Generate a Python function with examples
+
+  FAILED (HTTP 000)
+
+──────────────────────────────────────────────
+TEST 3/5: Structured JSON Output
+  Validate model can produce well-formed JSON
+
+  FAILED (HTTP 000)
+
+──────────────────────────────────────────────
+TEST 4/5: Translation
+  Translate English to Japanese
+
+  FAILED (HTTP 000)
+
+──────────────────────────────────────────────
+TEST 5/5: Tool Calling
+  Validate native function calling via tool_call_parser=mistral
+
+  FAILED (HTTP 000)
+
+==============================================
+ SUMMARY: 0/5 passed, 0/5 failed
+==============================================

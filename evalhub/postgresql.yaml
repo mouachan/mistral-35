@@ -1,0 +1,103 @@
+# --- PVC ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: evalhub-db-pvc
+  namespace: evalhub
+  labels:
+    app: evalhub-db
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: gp3-csi
+  resources:
+    requests:
+      storage: 5Gi
+---
+# --- Deployment ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: evalhub-db
+  namespace: evalhub
+  labels:
+    app: evalhub-db
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: evalhub-db
+  template:
+    metadata:
+      labels:
+        app: evalhub-db
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/gpu
+                    operator: DoesNotExist
+      containers:
+        - name: postgresql
+          image: registry.redhat.io/rhel9/postgresql-15:latest
+          ports:
+            - containerPort: 5432
+              protocol: TCP
+          env:
+            - name: POSTGRESQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: evalhub-db-credentials
+                  key: db-user
+            - name: POSTGRESQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: evalhub-db-credentials
+                  key: db-password
+            - name: POSTGRESQL_DATABASE
+              value: "eval_hub"
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/pgsql/data
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          livenessProbe:
+            exec:
+              command:
+                - /usr/libexec/check-container
+                - --live
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command:
+                - /usr/libexec/check-container
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: evalhub-db-pvc
+---
+# --- Service ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: evalhub-db
+  namespace: evalhub
+  labels:
+    app: evalhub-db
+spec:
+  selector:
+    app: evalhub-db
+  ports:
+    - port: 5432
+      targetPort: 5432
+      protocol: TCP

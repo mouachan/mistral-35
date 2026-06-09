@@ -1,0 +1,182 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: guidellm-benchmark
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      containers:
+      - name: guidellm
+        image: quay.io/rhoai-genaiops/guidellm:v1
+        imagePullPolicy: Always
+        env:
+        - name: GUIDELLM_TARGET
+          value: "http://mistral-medium-3-5-128b-metrics:8000/v1"
+        - name: GUIDELLM_MODEL
+          value: "mistral-medium-3-5-128b"
+        - name: GUIDELLM_PROCESSOR
+          value: "mistralai/Mistral-Medium-3.5-128B"
+        - name: GUIDELLM_DATA
+          value: '{"type":"emulated","prompt_tokens":256,"output_tokens":128}'
+        - name: GUIDELLM_OUTPUT_PATH
+          value: "/results/guidellm/benchmarks.json"
+        - name: GUIDELLM_RATE_TYPE
+          value: "synchronous"
+        - name: GUIDELLM_MAX_SECONDS
+          value: "120"
+        - name: GUIDELLM_MAX_REQUESTS
+          value: "100"
+        - name: MLFLOW_TRACKING_URI
+          value: "https://mlflow.redhat-ods-applications.svc:8443"
+        - name: MLFLOW_TRACKING_INSECURE_TLS
+          value: "true"
+        - name: MLFLOW_EXPERIMENT_NAME
+          value: "benchmark-mistral-3.5"
+        - name: MLFLOW_WORKSPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -euo pipefail
+
+          echo "Upgrading transformers and mistral-common..."
+          export PIP_TARGET=/tmp/pip-packages
+          pip install --quiet --upgrade "transformers>=5.4.0" "mistral-common>=1.11.1"
+          export PYTHONPATH="${PIP_TARGET}:${PYTHONPATH:-}"
+          export PATH="${PIP_TARGET}/bin:${PATH}"
+
+          mkdir -p $(dirname ${GUIDELLM_OUTPUT_PATH})
+
+          echo "=============================================="
+          echo " GuideLLM Benchmark — Mistral Medium 3.5 128B"
+          echo "=============================================="
+          echo " Target:  ${GUIDELLM_TARGET}"
+          echo " Model:   ${GUIDELLM_MODEL}"
+          echo " Date:    $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "=============================================="
+          echo ""
+
+          guidellm benchmark \
+            --target "${GUIDELLM_TARGET}" \
+            --model "${GUIDELLM_MODEL}" \
+            --processor "${GUIDELLM_PROCESSOR}" \
+            --data "${GUIDELLM_DATA}" \
+            --output-path "${GUIDELLM_OUTPUT_PATH}" \
+            --rate-type "${GUIDELLM_RATE_TYPE}" \
+            --max-seconds "${GUIDELLM_MAX_SECONDS}"
+
+          echo ""
+          echo "=============================================="
+          echo " Benchmark complete — exporting to MLflow"
+          echo "=============================================="
+
+          pip install --quiet mlflow
+          export MLFLOW_TRACKING_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+
+          python3 << 'PYEOF'
+          import json
+          import os
+          import mlflow
+
+          output_path = os.environ["GUIDELLM_OUTPUT_PATH"]
+          model = os.environ["GUIDELLM_MODEL"]
+
+          with open(output_path) as f:
+              data = json.load(f)
+
+          mlflow.set_experiment(os.environ["MLFLOW_EXPERIMENT_NAME"])
+
+          benchmarks = data if isinstance(data, list) else data.get("benchmarks", [data])
+          metadata = data.get("metadata", {}) if isinstance(data, dict) else {}
+          args = data.get("args", {}) if isinstance(data, dict) else {}
+
+          from datetime import datetime, timezone
+          timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
+
+          with mlflow.start_run(run_name=f"{model}-{timestamp}") as parent:
+              mlflow.set_tag("model", model)
+              mlflow.set_tag("guidellm_version", metadata.get("guidellm_version", "unknown"))
+              mlflow.set_tag("platform", metadata.get("platform", "unknown"))
+
+              mlflow.log_param("target", os.environ["GUIDELLM_TARGET"])
+              mlflow.log_param("model", model)
+              mlflow.log_param("processor", os.environ["GUIDELLM_PROCESSOR"])
+              mlflow.log_param("data_config", os.environ["GUIDELLM_DATA"])
+              mlflow.log_param("rate_type", os.environ["GUIDELLM_RATE_TYPE"])
+              mlflow.log_param("max_seconds", os.environ["GUIDELLM_MAX_SECONDS"])
+
+              mlflow.log_artifact(output_path)
+
+              for i, bench in enumerate(benchmarks):
+                  config = bench.get("config", {})
+                  strategy = config.get("strategy", {})
+                  metrics = bench.get("metrics", {})
+                  totals = metrics.get("request_totals", {})
+
+                  stype = strategy.get("type_", strategy.get("type", os.environ.get("GUIDELLM_RATE_TYPE", "unknown")))
+                  workers = strategy.get("worker_count", 1)
+                  concurrency = strategy.get("max_concurrency", 1)
+                  run_name = f"{model}-{stype}-w{workers}-c{concurrency}"
+
+                  with mlflow.start_run(run_name=run_name, nested=True):
+                      mlflow.log_param("strategy", stype)
+                      mlflow.log_param("worker_count", workers)
+                      mlflow.log_param("max_concurrency", strategy.get("max_concurrency", "N/A"))
+                      mlflow.log_param("run_index", config.get("run_index", i))
+
+                      mlflow.log_metric("successful_requests", totals.get("successful", 0))
+                      mlflow.log_metric("errored_requests", totals.get("errored", 0))
+                      mlflow.log_metric("total_requests", totals.get("total", 0))
+
+                      metric_keys = [
+                          "time_to_first_token_ms",
+                          "time_per_output_token_ms",
+                          "inter_token_latency_ms",
+                          "output_tokens_per_second",
+                          "tokens_per_second",
+                          "request_latency",
+                          "requests_per_second",
+                      ]
+                      stat_keys = ["mean", "median", "min", "max", "std_dev"]
+                      percentile_keys = ["p50", "p90", "p95", "p99"]
+
+                      for mk in metric_keys:
+                          successful = metrics.get(mk, {}).get("successful", metrics.get(mk, {}))
+                          if not isinstance(successful, dict) or successful.get("count", 0) == 0:
+                              continue
+                          for sk in stat_keys:
+                              val = successful.get(sk)
+                              if val is not None:
+                                  mlflow.log_metric(f"{mk}_{sk}", val)
+                          percs = successful.get("percentiles", {})
+                          for pk in percentile_keys:
+                              val = percs.get(pk)
+                              if val is not None:
+                                  mlflow.log_metric(f"{mk}_{pk}", val)
+
+              print(f"MLflow export done — experiment: {os.environ['MLFLOW_EXPERIMENT_NAME']}")
+              print(f"Parent run: {parent.info.run_id}")
+          PYEOF
+
+          echo "=============================================="
+          echo " Export to MLflow complete"
+          echo "=============================================="
+        volumeMounts:
+        - name: results
+          mountPath: /results
+        resources:
+          requests:
+            cpu: "2"
+            memory: 2Gi
+          limits:
+            cpu: "4"
+            memory: 4Gi
+      volumes:
+      - name: results
+        persistentVolumeClaim:
+          claimName: test-results-pvc
+      restartPolicy: Never

@@ -1,0 +1,205 @@
+# -------------------------------------------------------------------
+# RBAC for EvalHub on RHOAI 3.4
+# -------------------------------------------------------------------
+# On RHOAI 3.4, the TrustyAI operator does not create all required
+# ClusterRoles automatically. These must be applied manually.
+# On RHOAI 3.5+, these are created by the operator.
+# -------------------------------------------------------------------
+
+# --- ClusterRole: proxy access for authenticated users ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: evalhub-proxy-access
+  namespace: redhat-ods-applications
+rules:
+- apiGroups: ["trustyai.opendatahub.io"]
+  resources: ["evalhubs", "evalhubs/proxy"]
+  verbs: ["get", "list", "watch", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: evalhub-proxy-all-users
+  namespace: redhat-ods-applications
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: evalhub-proxy-access
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: system:authenticated
+---
+
+# --- ClusterRole: aggregate permissions for admin/edit users ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: aggregate-evalhub-permissions
+  labels:
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+rules:
+- apiGroups: ["trustyai.opendatahub.io"]
+  resources: ["evalhubs", "evalhubs/proxy", "evaluations", "collections", "providers", "lmevaljobs"]
+  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+- apiGroups: ["trustyai.opendatahub.io"]
+  resources: ["lmevaljobs/status"]
+  verbs: ["get"]
+---
+
+# --- ClusterRole: EvalHub controller (operator SA) ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: trustyai-evalhub-controller
+rules:
+- apiGroups: ["trustyai.opendatahub.io"]
+  resources: ["*"]
+  verbs: ["*"]
+- apiGroups: [""]
+  resources: ["namespaces", "pods", "services", "configmaps", "secrets", "serviceaccounts", "persistentvolumeclaims", "events"]
+  verbs: ["*"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets"]
+  verbs: ["*"]
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["*"]
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+  verbs: ["*"]
+- apiGroups: ["route.openshift.io"]
+  resources: ["routes", "routes/custom-host"]
+  verbs: ["*"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["networkpolicies"]
+  verbs: ["*"]
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["*"]
+- apiGroups: ["monitoring.coreos.com"]
+  resources: ["servicemonitors"]
+  verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: trustyai-evalhub-controller-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: trustyai-evalhub-controller
+subjects:
+- kind: ServiceAccount
+  name: trustyai-service-operator-controller-manager
+  namespace: redhat-ods-applications
+---
+
+# --- ClusterRole: auth reviewer (token validation) ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: trustyai-service-operator-evalhub-auth-reviewer-role
+rules:
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["tokenreviews"]
+  verbs: ["create"]
+- apiGroups: ["authorization.k8s.io"]
+  resources: ["subjectaccessreviews"]
+  verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: trustyai-evalhub-auth-reviewer-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: trustyai-service-operator-evalhub-auth-reviewer-role
+subjects:
+- kind: ServiceAccount
+  name: evalhub-service
+  namespace: redhat-ods-applications
+---
+
+# --- ClusterRole: job writer (create jobs/pods in tenant namespaces) ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: trustyai-service-operator-evalhub-jobs-writer
+rules:
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "pods/status"]
+  verbs: ["create", "delete", "get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["services", "serviceaccounts"]
+  verbs: ["create", "delete", "get", "list", "update", "watch"]
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: ["roles", "rolebindings"]
+  verbs: ["create", "delete", "get", "list", "update", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: trustyai-evalhub-jobs-writer-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: trustyai-service-operator-evalhub-jobs-writer
+subjects:
+- kind: ServiceAccount
+  name: evalhub-service
+  namespace: redhat-ods-applications
+---
+
+# --- ClusterRole: job config (create configmaps/secrets in tenant namespaces) ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: trustyai-service-operator-evalhub-job-config
+rules:
+- apiGroups: [""]
+  resources: ["configmaps", "secrets"]
+  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["create", "delete", "get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: trustyai-evalhub-job-config-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: trustyai-service-operator-evalhub-job-config
+subjects:
+- kind: ServiceAccount
+  name: evalhub-service
+  namespace: redhat-ods-applications
+---
+
+# --- ClusterRoleBinding: MLflow integration ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: evalhub-mlflow-integration
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mlflow-operator-mlflow-integration
+subjects:
+- kind: ServiceAccount
+  name: evalhub-service
+  namespace: redhat-ods-applications
+- kind: ServiceAccount
+  name: evalhub-redhat-ods-applications-job
+  namespace: redhat-ods-applications

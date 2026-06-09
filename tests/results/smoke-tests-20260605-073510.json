@@ -1,0 +1,11 @@
+{
+  "endpoint": "http://mistral-medium-3-5-128b-predictor:80",
+  "model": "mistral-medium-3-5-128b",
+  "timestamp": "2026-06-05T07:35:10Z",
+  "summary": {
+    "passed": 0,
+    "failed": 0,
+    "total": 5
+  },
+  "tests": []
+}

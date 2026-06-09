@@ -1,0 +1,72 @@
+{{- if .Values.benchmark.enabled }}
+# ---------------------------------------------------------------
+# Submits a GuideLLM benchmark to EvalHub.
+# EvalHub creates the actual evaluation pod in this namespace.
+# Results are exported to MLflow automatically.
+# ---------------------------------------------------------------
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: benchmark-submit-{{ .Values.model.name }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "mistral.labels" . | nindent 4 }}
+    app.kubernetes.io/component: benchmark
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: benchmark-submit
+        {{- include "mistral.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: submit
+          image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          command:
+            - /bin/sh
+            - -c
+            - |
+              TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+
+              echo "=============================================="
+              echo " Submitting GuideLLM benchmark to EvalHub"
+              echo " Model:  {{ .Values.model.name }}"
+              echo " Target: http://{{ .Values.model.name }}-predictor.{{ .Values.namespace }}.svc.cluster.local:8000/v1"
+              echo "=============================================="
+
+              curl -sS -k -X POST {{ .Values.benchmark.evalhub.url }}/api/v1/evaluations/jobs \
+                -H "Authorization: Bearer ${TOKEN}" \
+                -H "Content-Type: application/json" \
+                -H "X-Tenant: {{ .Values.namespace }}" \
+                -d '{
+                  "name": "bench-{{ .Values.model.name }}",
+                  "model": {
+                    "url": "http://{{ .Values.model.name }}-predictor.{{ .Values.namespace }}.svc.cluster.local:8000/v1",
+                    "name": "{{ .Values.model.name }}"
+                  },
+                  "benchmarks": [
+                    {
+                      "id": "{{ .Values.benchmark.benchmarkId }}",
+                      "provider_id": "{{ .Values.benchmark.provider }}"
+                    }
+                  ],
+                  "experiment": {
+                    "name": "{{ .Values.benchmark.experiment }}"
+                  }
+                }' | tee /tmp/response.json
+
+              echo ""
+              JOB_ID=$(cat /tmp/response.json | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+              echo "Job submitted: ${JOB_ID}"
+              echo "=============================================="
+{{- end }}

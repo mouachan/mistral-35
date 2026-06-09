@@ -1,0 +1,11 @@
+{
+  "endpoint": "http://mistral-medium-3-5-128b-metrics:8000",
+  "model": "mistral-medium-3-5-128b",
+  "timestamp": "2026-06-05T07:36:41Z",
+  "summary": {
+    "passed": 0,
+    "failed": 0,
+    "total": 5
+  },
+  "tests": []
+}
