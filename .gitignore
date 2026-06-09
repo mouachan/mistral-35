@@ -2,3 +2,4 @@
 charts/
 .env
 *.secret
+.DS_Store
